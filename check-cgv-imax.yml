@@ -1,0 +1,43 @@
+name: CGV IMAX Booking Watcher
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 5분마다 실행 (GitHub 인프라 상황에 따라 지연될 수 있음)
+  workflow_dispatch:         # Actions 탭에서 수동 실행용 버튼
+
+permissions:
+  contents: write            # state.json 커밋을 위해 필요
+
+concurrency:
+  group: cgv-imax-watcher
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check CGV IMAX booking status
+        env:
+          CGV_REQUEST_PAYLOAD: ${{ secrets.CGV_REQUEST_PAYLOAD }}
+          DOORAY_WEBHOOK_URL: ${{ secrets.DOORAY_WEBHOOK_URL }}
+          MOVIE_NAME: ${{ vars.MOVIE_NAME }}
+        run: python check_cgv_imax.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/state.json
+          git diff --cached --quiet || git commit -m "chore: update booking state [skip ci]"
+          git push
