@@ -14,7 +14,10 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # GitHub가 제공하는 ubuntu-latest(해외 데이터센터 IP)로는 CGV가 요청을 차단해
+    # System_Notice.html로 리다이렉트시킨다. 국내 IP를 쓰는 self-hosted runner에서
+    # 실행해야 한다. (README의 "문제 해결" 항목 참고)
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
