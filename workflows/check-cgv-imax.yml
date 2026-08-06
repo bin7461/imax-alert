@@ -29,9 +29,11 @@ jobs:
 
       - name: Check CGV IMAX booking status
         env:
-          CGV_REQUEST_PAYLOAD: ${{ secrets.CGV_REQUEST_PAYLOAD }}
           DOORAY_WEBHOOK_URL: ${{ secrets.DOORAY_WEBHOOK_URL }}
+          CUSTOM_THEATER_CD: ${{ secrets.CUSTOM_THEATER_CD }}   # THEATER_CODES에 없는 극장일 때만 필요
           MOVIE_NAME: ${{ vars.MOVIE_NAME }}
+          THEATER: ${{ vars.THEATER }}
+          HALL_TYPE: ${{ vars.HALL_TYPE }}
         run: python check_cgv_imax.py
 
       - name: Commit updated state
