@@ -38,22 +38,27 @@ from pathlib import Path
 import requests
 
 CGV_URL = "http://ticket.cgv.co.kr/CGV2011/RIA/CJ000.aspx/CJ_TICKET_SCHEDULE_TOTAL_PLAY_YMD"
+WARMUP_URL = (
+    "http://ticket.cgv.co.kr/Reservation/Reservation.aspx?MOVIE_CD=&MOVIE_CD_GROUP="
+    "&PLAY_YMD=&THEATER_CD=&PLAY_NUM=&PLAY_START_TM=&AREA_CD=&SCREEN_CD=&THIRD_ITEM="
+    "&SCREEN_RATING_CD="
+)
 STATE_PATH = Path("data/state.json")
 
-REQUEST_HEADERS = {
-    "Accept": "application/json, text/javascript, */*; q=0.01",
+COMMON_HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Content-Type": "application/json",
-    "Origin": "http://ticket.cgv.co.kr",
-    "Referer": (
-        "http://ticket.cgv.co.kr/Reservation/Reservation.aspx?MOVIE_CD=&MOVIE_CD_GROUP="
-        "&PLAY_YMD=&THEATER_CD=&PLAY_NUM=&PLAY_START_TM=&AREA_CD=&SCREEN_CD=&THIRD_ITEM="
-        "&SCREEN_RATING_CD="
-    ),
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     ),
+}
+
+API_HEADERS = {
+    **COMMON_HEADERS,
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Content-Type": "application/json",
+    "Origin": "http://ticket.cgv.co.kr",
+    "Referer": WARMUP_URL,
     "X-Requested-With": "XMLHttpRequest",
 }
 
@@ -127,12 +132,52 @@ def save_state(state: dict) -> None:
 
 def fetch_schedule(payload: dict):
     """CGV API를 호출해 (상영 중 영화 목록, 상영일 목록)을 반환한다."""
-    resp = requests.post(CGV_URL, json=payload, headers=REQUEST_HEADERS, timeout=15)
+    session = requests.Session()
+
+    # 세션 쿠키(ASP.NET_SessionId 등) 없이 API를 바로 호출하면 CGV가 봇으로 판단해
+    # System_Notice.html 같은 안내 페이지로 리다이렉트시키는 경우가 있다.
+    # 실제 브라우저처럼 예매 페이지를 한 번 먼저 방문해 세션을 확보한 뒤 API를 호출한다.
+    try:
+        session.get(WARMUP_URL, headers=COMMON_HEADERS, timeout=15)
+    except requests.RequestException as e:
+        print(f"경고: 세션 초기화(warm-up) 요청 실패, 계속 진행합니다: {e}")
+
+    resp = session.post(
+        CGV_URL, json=payload, headers=API_HEADERS, timeout=15, allow_redirects=False
+    )
+
+    # 정상 응답이 아니라 리다이렉트(3xx)가 오면, CGV가 봇 트래픽으로 보고 안내 페이지로
+    # 돌려보낸 것이다. 이 경우 raise_for_status만으로는 원인을 알기 어려우니
+    # 무엇이 왔는지 로그로 남기고 명확한 에러 메시지를 낸다.
+    if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+        location = resp.headers.get("Location", "(알 수 없음)")
+        sys.exit(
+            "CGV 서버가 요청을 정상 처리하지 않고 다른 페이지로 리다이렉트했습니다.\n"
+            f"  응답 코드: {resp.status_code}\n"
+            f"  리다이렉트 대상: {location}\n"
+            "가능한 원인:\n"
+            "  1) GitHub Actions 실행 서버의 IP가 CGV에서 차단/의심 트래픽으로 처리됨\n"
+            "     (해외 데이터센터 IP를 차단하는 정책일 가능성이 높음)\n"
+            "  2) 짧은 시간에 반복 요청되어 일시적으로 차단됨\n"
+            "해결 방법:\n"
+            "  - 잠시 후 다시 실행해서 매번 같은 리다이렉트가 발생하는지 확인\n"
+            "  - self-hosted runner(국내 서버/집 PC 등)로 워크플로를 옮겨서 실행\n"
+            "  - 그래도 안 되면 CGV가 legacy ticket.cgv.co.kr 자체를 막았을 가능성이 있음"
+        )
+
     resp.raise_for_status()
 
     # ASP.NET PageMethods 응답은 {"d": {"DATA": "<xml 문자열>", ...}} 형태로 감싸여 있다.
-    data = json.loads(resp.content.decode("utf-8-sig"))
-    xml_string = data["d"]["DATA"]
+    try:
+        data = json.loads(resp.content.decode("utf-8-sig"))
+        xml_string = data["d"]["DATA"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        snippet = resp.content[:300].decode("utf-8", errors="replace")
+        sys.exit(
+            f"CGV 응답을 예상한 형식으로 해석하지 못했습니다: {e}\n"
+            f"응답 앞부분: {snippet}"
+        )
+
     root = ET.fromstring(xml_string)
 
     movies = []
